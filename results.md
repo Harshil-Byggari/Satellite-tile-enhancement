@@ -268,7 +268,9 @@ Real-pair check: skipped (not configured).
 4. **Bicubic downsampling favours SR:** Convolutional super-resolution networks like FSRCNN are trained using bicubic downsampling as the degradation kernel. Evaluating SR on `bicubic_ds` creates an artificial advantage (inverse problem matching the training distribution) compared to realistic anti-aliased area downsampling with noise and compression.
 5. **The scale=2 real-pair design is stronger but requires an API key:** Directly acquiring native scale=1 (640x640) and scale=2 (1280x1280) tiles provides true physical sensor ground truth, eliminating synthetic degradation entirely. However, doing so requires active Google Maps Platform API credentials and incurs usage quotas.
 
-## 9. Per-Image Results Table (Sample / Selected Tiles)
+## 9. Per-Image Results Table (Test A & Full Metrics Pointer)
+
+> **Note on Full Per-Image Records:** Comprehensive per-tile records for Test A, Test B (including all baseline variants and stage ablations), and no-reference evaluation on all 41 tiles are exported to `results.csv`.
 
 | Tile | Source | Variant | SR PSNR | Bicubic PSNR | ΔPSNR | SR SSIM | Bicubic SSIM | ΔSSIM |
 |:---|:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|
