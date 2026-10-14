@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""Comprehensive evaluation suite for Satellite Tile Enhancement.
-
-Evaluates:
-  Test A: Pretrained Learned Super-Resolution (FSRCNN) vs Bicubic upscaling (2x)
-          across clean, bicubic-downsampled, and realistic degradation variants.
-  Test B: Classical enhancement pipeline vs degraded baseline across
-          blur+jpeg+noise, haze, combined, and clean-null variants, including
-          per-stage ablation (denoise only, contrast only, sharpen only, full).
-  No-Reference: Sharpness (Laplacian var), noise sigma, 8x8 blockiness, contrast,
-                and CIE LAB Delta E color shift on real tiles.
-  Optional Real-Pair Check: Validates against Google Static Maps scale=2 images
-                            if --pairs-csv and GOOGLE_MAPS_API_KEY are provided.
-
-Outputs:
-  results.md - Detailed Markdown evaluation report with statistics, CIs, and answers.
-  results.csv - Machine-readable CSV containing all per-image metric records.
-"""
+"""Evaluation suite for satellite tile enhancement and super-resolution."""
 
 from __future__ import annotations
 
@@ -50,30 +34,25 @@ from enhance import (
     upscale_sr,
 )
 
-# Random seed and bootstrap configuration
-DEFAULT_SEED: int = 0
-BOOTSTRAP_ROUNDS: int = 2000
-BOOTSTRAP_ALPHA: float = 0.05
+DEFAULT_SEED = 0
+BOOTSTRAP_ROUNDS = 2000
+BOOTSTRAP_ALPHA = 0.05
 
-# Degradation parameters
-HAZE_T: float = 0.7
-HAZE_A: float = 220.0
-BLUR_SIGMA_TESTB: float = 1.2
-BLUR_SIGMA_COMBINED: float = 1.0
-JPEG_QUALITY_TESTB: int = 60
-JPEG_QUALITY_COMBINED: int = 65
-JPEG_QUALITY_REALISTIC: int = 70
-NOISE_SIGMA_TESTB: float = 3.0
-NOISE_SIGMA_COMBINED: float = 3.0
-NOISE_SIGMA_REALISTIC: float = 3.0
+HAZE_T = 0.7
+HAZE_A = 220.0
+BLUR_SIGMA_TESTB = 1.2
+BLUR_SIGMA_COMBINED = 1.0
+JPEG_QUALITY_TESTB = 60
+JPEG_QUALITY_COMBINED = 65
+JPEG_QUALITY_REALISTIC = 70
+NOISE_SIGMA_TESTB = 3.0
+NOISE_SIGMA_COMBINED = 3.0
+NOISE_SIGMA_REALISTIC = 3.0
 
 
-# ---------------------------------------------------------------------------
-# 3a) Degradation Helpers
-# ---------------------------------------------------------------------------
+# --- Synthetic Degradations ---
 
 def downsample(img: np.ndarray, factor: int | float = 2, mode: str = "area") -> np.ndarray:
-    """Downsample an image by given factor using INTER_AREA or INTER_CUBIC."""
     h, w = img.shape[:2]
     new_w = max(1, int(round(w / factor)))
     new_h = max(1, int(round(h / factor)))
@@ -82,40 +61,33 @@ def downsample(img: np.ndarray, factor: int | float = 2, mode: str = "area") -> 
 
 
 def jpeg(img: np.ndarray, quality: int) -> np.ndarray:
-    """Simulate JPEG compression artifacts via in-memory encode and decode."""
     params = [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]
     success, enc = cv2.imencode(".jpg", img, params)
     if not success:
         raise RuntimeError(f"Failed to compress image to JPEG at quality {quality}")
-    dec = cv2.imdecode(enc, cv2.IMREAD_COLOR)
-    return dec
+    return cv2.imdecode(enc, cv2.IMREAD_COLOR)
 
 
 def gauss_noise(img: np.ndarray, sigma: float, rng: np.random.Generator) -> np.ndarray:
-    """Add zero-mean Gaussian sensor noise with standard deviation sigma."""
     if sigma <= 0:
         return img.copy()
     noise = rng.normal(0.0, sigma, img.shape)
-    noisy = np.clip(img.astype(np.float32) + noise, 0, 255)
-    return noisy.astype(np.uint8)
+    return np.clip(img.astype(np.float32) + noise, 0, 255).astype(np.uint8)
 
 
 def blur(img: np.ndarray, sigma: float) -> np.ndarray:
-    """Apply Gaussian blur with standard deviation sigma."""
     if sigma <= 0:
         return img.copy()
     return cv2.GaussianBlur(img, (0, 0), sigmaX=sigma, sigmaY=sigma)
 
 
 def add_haze(img: np.ndarray, t: float = HAZE_T, a: float = HAZE_A) -> np.ndarray:
-    """Simulate atmospheric haze using Koschmieder optical model: I' = I*t + A*(1-t)."""
+    """Koschmieder optical model: I' = I*t + A*(1-t)."""
     hazy = img.astype(np.float32) * t + a * (1.0 - t)
     return np.clip(hazy, 0, 255).astype(np.uint8)
 
 
-# ---------------------------------------------------------------------------
-# 3d) Full-Reference Metrics
-# ---------------------------------------------------------------------------
+# --- Full-Reference Metrics ---
 
 def compute_psnr(img_test: np.ndarray, img_ref: np.ndarray) -> float:
     """Compute Peak Signal-to-Noise Ratio (PSNR) in dB between test and reference."""
@@ -155,24 +127,19 @@ def compute_sobel_edge_correlation(img_test: np.ndarray, img_ref: np.ndarray) ->
     return float(corr)
 
 
-# ---------------------------------------------------------------------------
-# 3e) No-Reference Metrics
-# ---------------------------------------------------------------------------
+# --- No-Reference Metrics ---
 
 def compute_laplacian_variance(img: np.ndarray) -> float:
-    """Compute variance of the Laplacian as a metric of perceived edge sharpness."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    lap = cv2.Laplacian(gray, cv2.CV_64F)
-    return float(lap.var())
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
 def compute_noise_sigma(img: np.ndarray) -> float:
-    """Estimate Gaussian noise standard deviation using Donoho-Johnstone wavelet detail MAD."""
     try:
         from skimage.restoration import estimate_sigma
         return float(estimate_sigma(img, channel_axis=-1, average_sigmas=True))
     except (ImportError, Exception):
-        # Exact fallback implementing Donoho & Johnstone (1994) db2 high-pass detail MAD estimator
+        # Fallback implementing Donoho-Johnstone (1994) db2 high-pass detail MAD estimator
         h_high = np.array([-0.4829629131445341, 0.8365163037378079, -0.2241438680420134, -0.12940952255126034])
         kernel = np.outer(h_high, h_high)
         sigmas: list[float] = []
@@ -181,34 +148,24 @@ def compute_noise_sigma(img: np.ndarray) -> float:
             ch = img[:, :, c].astype(np.float64)
             d = scipy.signal.convolve2d(ch, kernel, mode="valid")[::2, ::2]
             d = d[np.nonzero(d)]
-            if len(d) == 0:
-                sigmas.append(0.0)
-            else:
-                sigmas.append(float(np.median(np.abs(d)) / denom))
+            sigmas.append(float(np.median(np.abs(d)) / denom) if len(d) > 0 else 0.0)
         return float(np.mean(sigmas))
 
 
 def compute_blockiness(img: np.ndarray) -> float:
-    """Compute JPEG 8x8 blockiness ratio: mean step across 8x8 boundaries / mean step elsewhere."""
+    """Ratio of mean intensity steps across 8x8 JPEG grid boundaries vs interior steps."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float64)
-    h, w = gray.shape
 
-    # Horizontal intensity steps
     diff_h = np.abs(gray[:, 1:] - gray[:, :-1])
-    # Boundary cols are where index + 1 is a multiple of 8 (i.e. col 7, 15, 23, ...)
     b_mask_h = np.zeros(diff_h.shape[1], dtype=bool)
     b_mask_h[7::8] = True
 
-    # Vertical intensity steps
     diff_v = np.abs(gray[1:, :] - gray[:-1, :])
     b_mask_v = np.zeros(diff_v.shape[0], dtype=bool)
     b_mask_v[7::8] = True
 
-    b_steps_h = diff_h[:, b_mask_h]
-    nb_steps_h = diff_h[:, ~b_mask_h]
-
-    b_steps_v = diff_v[b_mask_v, :]
-    nb_steps_v = diff_v[~b_mask_v, :]
+    b_steps_h, nb_steps_h = diff_h[:, b_mask_h], diff_h[:, ~b_mask_h]
+    b_steps_v, nb_steps_v = diff_v[b_mask_v, :], diff_v[~b_mask_v, :]
 
     total_b = float(np.sum(b_steps_h) + np.sum(b_steps_v))
     count_b = b_steps_h.size + b_steps_v.size
@@ -225,14 +182,11 @@ def compute_blockiness(img: np.ndarray) -> float:
 
 
 def compute_contrast(img: np.ndarray) -> float:
-    """Compute contrast as the standard deviation of the L channel in CIELAB color space."""
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    l_ch = lab[:, :, 0]
-    return float(np.std(l_ch))
+    return float(np.std(lab[:, :, 0]))
 
 
 def compute_color_shift_delta_e(img_test: np.ndarray, img_ref: np.ndarray) -> float:
-    """Compute mean CIE LAB Delta E color difference (resizing ref with bicubic if shapes differ)."""
     if img_test.shape[:2] != img_ref.shape[:2]:
         img_ref_aligned = cv2.resize(
             img_ref,
@@ -248,9 +202,7 @@ def compute_color_shift_delta_e(img_test: np.ndarray, img_ref: np.ndarray) -> fl
     return float(np.mean(delta_e))
 
 
-# ---------------------------------------------------------------------------
-# 3f) Statistics & Bootstrap
-# ---------------------------------------------------------------------------
+# --- Bootstrap Statistics ---
 
 def compute_bootstrap_ci(
     diffs: np.ndarray,
@@ -258,7 +210,6 @@ def compute_bootstrap_ci(
     alpha: float = BOOTSTRAP_ALPHA,
     seed: int = DEFAULT_SEED,
 ) -> tuple[float, float]:
-    """Compute empirical 95% bootstrap confidence interval of the mean difference."""
     if len(diffs) == 0:
         return (0.0, 0.0)
     rng = np.random.default_rng(seed)
@@ -276,14 +227,10 @@ def summarize_paired_diffs(
     diffs: Sequence[float],
     seed: int = DEFAULT_SEED,
 ) -> dict[str, Any]:
-    """Compute mean difference, win rate, and 95% bootstrap confidence interval."""
     arr = np.array(diffs, dtype=np.float64)
-    # Remove infinities if clean_null baseline is infinite PSNR
-    finite_mask = np.isfinite(arr)
-    valid_arr = arr[finite_mask] if np.any(finite_mask) else np.array([0.0])
+    valid_arr = arr[np.isfinite(arr)] if np.any(np.isfinite(arr)) else np.array([0.0])
 
     mean_diff = float(np.mean(valid_arr))
-    # Win is strictly positive diff (> 0)
     win_rate = float(np.mean(arr > 0) * 100.0) if len(arr) > 0 else 0.0
     ci_low, ci_high = compute_bootstrap_ci(valid_arr, seed=seed)
 
@@ -304,9 +251,7 @@ def summarize_paired_diffs(
     }
 
 
-# ---------------------------------------------------------------------------
-# 3g) Optional Real-Pair Check
-# ---------------------------------------------------------------------------
+# --- Optional Real-Pair Check ---
 
 def run_optional_real_pair_check(
     pairs_csv: Path | None,
@@ -400,28 +345,21 @@ def run_evaluation(
 
     records: list[dict[str, Any]] = []
 
-    # Benchmark runtimes
     runtime_classical: list[float] = []
     runtime_bicubic: list[float] = []
     runtime_sr: list[float] = []
 
-    # Ensure model cached
     get_sr_model("fsrcnn")
-
     print(f"\nEvaluating {len(eval_paths)} tiles (seed={seed})...")
 
     for path in tqdm(eval_paths, desc="Evaluating tiles"):
         raw_img = load_image(path)
         h, w = raw_img.shape[:2]
-        # Crop 1 boundary pixel if odd so 2x downsample and 2x upscale match exactly
-        h_even = (h // 2) * 2
-        w_even = (w // 2) * 2
-        hr = raw_img[:h_even, :w_even].copy()
+        hr = raw_img[: (h // 2) * 2, : (w // 2) * 2].copy()
 
         stem = path.stem
         source = "google" if "google" in stem.lower() else ("mapbox" if "mapbox" in stem.lower() else "unknown")
 
-        # Runtime profiling on original tile
         t0 = time.perf_counter()
         classical_out = enhance_classical(hr)
         runtime_classical.append(time.perf_counter() - t0)
@@ -434,10 +372,7 @@ def run_evaluation(
         sr_out = upscale_sr(hr)
         runtime_sr.append(time.perf_counter() - t0)
 
-        # -------------------------------------------------------------------
         # Test A: SR vs Bicubic
-        # Variants: "clean", "bicubic_ds", "realistic"
-        # -------------------------------------------------------------------
         lr_clean = downsample(hr, 2, mode="area")
         lr_bic = downsample(hr, 2, mode="bicubic")
         lr_real = gauss_noise(jpeg(downsample(hr, 2, mode="area"), JPEG_QUALITY_REALISTIC), NOISE_SIGMA_REALISTIC, rng)
@@ -445,10 +380,7 @@ def run_evaluation(
         for variant_name, lr_img in [("clean", lr_clean), ("bicubic_ds", lr_bic), ("realistic", lr_real)]:
             recon_bic = upscale_bicubic(lr_img)
             recon_sr = upscale_sr(lr_img)
-
-            # Assert shape equality with reference HR
-            assert recon_bic.shape == hr.shape, f"Shape mismatch: {recon_bic.shape} vs {hr.shape}"
-            assert recon_sr.shape == hr.shape, f"Shape mismatch: {recon_sr.shape} vs {hr.shape}"
+            assert recon_bic.shape == hr.shape and recon_sr.shape == hr.shape
 
             p_bic = compute_psnr(recon_bic, hr)
             p_sr = compute_psnr(recon_sr, hr)
@@ -491,10 +423,7 @@ def run_evaluation(
                 "diff_sobel": e_sr - e_bic,
             })
 
-        # -------------------------------------------------------------------
         # Test B: Classical Pipeline vs Degraded Baseline
-        # Degradations: blur_jpeg_noise, haze, combined, clean_null
-        # -------------------------------------------------------------------
         deg_blur_jpeg_noise = gauss_noise(jpeg(blur(hr, BLUR_SIGMA_TESTB), JPEG_QUALITY_TESTB), NOISE_SIGMA_TESTB, rng)
         deg_haze = add_haze(hr, HAZE_T, HAZE_A)
         deg_combined = gauss_noise(jpeg(add_haze(blur(hr, BLUR_SIGMA_COMBINED), HAZE_T, HAZE_A), JPEG_QUALITY_COMBINED), NOISE_SIGMA_COMBINED, rng)
@@ -508,7 +437,6 @@ def run_evaluation(
         ]
 
         for deg_name, deg_img in degradations:
-            # Baseline is degraded image itself
             base_p = compute_psnr(deg_img, hr)
             base_s = compute_ssim(deg_img, hr)
             base_e = compute_sobel_edge_correlation(deg_img, hr)
@@ -552,16 +480,12 @@ def run_evaluation(
                 "diff_sobel": e_enh - base_e,
             })
 
-            # Per-stage ablation on blur_jpeg_noise and haze
             if deg_name in ("blur_jpeg_noise", "haze"):
-                # Denoise only
                 denoised_only = denoise(deg_img)
-                # Contrast only (stretch_levels + CLAHE on L channel in LAB)
                 lab_abl = cv2.cvtColor(deg_img, cv2.COLOR_BGR2LAB)
                 l_abl, a_abl, b_abl = cv2.split(lab_abl)
                 l_abl = apply_clahe(stretch_levels(l_abl))
                 contrast_only = cv2.cvtColor(cv2.merge([l_abl, a_abl, b_abl]), cv2.COLOR_LAB2BGR)
-                # Sharpen only
                 sharpen_only = unsharp(deg_img)
 
                 ablations = [
@@ -593,10 +517,7 @@ def run_evaluation(
                         "diff_sobel": e_st - base_e,
                     })
 
-        # -------------------------------------------------------------------
-        # 3e) No-Reference Metrics on Real Tiles
-        # -------------------------------------------------------------------
-        # 1. Real input vs Classical output (at 1x)
+        # No-reference metrics on native and enhanced tiles
         lap_in = compute_laplacian_variance(hr)
         sig_in = compute_noise_sigma(hr)
         blk_in = compute_blockiness(hr)
@@ -608,7 +529,6 @@ def run_evaluation(
         cnt_cl = compute_contrast(classical_out)
         de_cl = compute_color_shift_delta_e(classical_out, hr)
 
-        # 2. Bicubic-2x vs SR-2x outputs (at 2x)
         lap_bic2 = compute_laplacian_variance(bicubic_out)
         sig_bic2 = compute_noise_sigma(bicubic_out)
         blk_bic2 = compute_blockiness(bicubic_out)
@@ -669,7 +589,6 @@ def run_evaluation(
             "delta_e": de_sr2,
         })
 
-    # Summary timing
     timing_summary = {
         "classical_avg": float(np.mean(runtime_classical)),
         "bicubic_avg": float(np.mean(runtime_bicubic)),
@@ -679,22 +598,15 @@ def run_evaluation(
         "sr_total": float(np.sum(runtime_sr)),
     }
 
-    # Optional real-pair check
     real_pair_summary = run_optional_real_pair_check(pairs_csv)
-
     meta = {
         "seed": seed,
         "n_tiles": len(eval_paths),
         "timing": timing_summary,
         "real_pair": real_pair_summary,
     }
-
     return records, meta
 
-
-# ---------------------------------------------------------------------------
-# Report & CSV Generators
-# ---------------------------------------------------------------------------
 
 def save_results_csv(records: list[dict[str, Any]], out_path: Path) -> None:
     """Save all evaluation records to results.csv."""
@@ -743,9 +655,6 @@ def generate_results_markdown(
     md_lines.append(f"  - **Haze Model:** $I' = I \\cdot t + A \\cdot (1 - t)$ with transmission $t = {HAZE_T}$, airlight $A = {HAZE_A}$.")
     md_lines.append(f"- **Statistical Rigor:** 95% two-sided empirical bootstrap confidence interval ({BOOTSTRAP_ROUNDS} resamples, seeded). CI containing zero indicates *no clear difference*.\n")
 
-    # -----------------------------------------------------------------------
-    # Aggregate Tables: Test A (SR vs Bicubic)
-    # -----------------------------------------------------------------------
     md_lines.append("## 2. Test A: Super-Resolution (FSRCNN) vs Bicubic Baseline (2x)\n")
     md_lines.append("Each LR tile is upscaled 2x using FSRCNN and Bicubic interpolation, then evaluated against the original HR reference.\n")
 
@@ -780,7 +689,6 @@ def generate_results_markdown(
     md_lines.append("| Variant | Source | Metric | Mean Diff | 95% Bootstrap CI | Win Rate (%) | Conclusion |")
     md_lines.append("|:---|:---|:---|:---:|:---:|:---:|:---|")
 
-    # Track conclusions for Answers section
     test_a_answers: dict[str, dict[str, dict[str, Any]]] = {}
 
     for var in variants_a:
@@ -805,9 +713,6 @@ def generate_results_markdown(
                     f"{stats['win_rate']:.1f}% | {stats['verdict']} |"
                 )
 
-    # -----------------------------------------------------------------------
-    # Aggregate Tables: Test B (Classical Pipeline)
-    # -----------------------------------------------------------------------
     md_lines.append("\n## 3. Test B: Classical Enhancement Pipeline Evaluation\n")
     md_lines.append("Evaluation of degraded baseline vs classical enhanced pipeline (`enhance_classical`) scored against ground truth HR.\n")
 
@@ -865,9 +770,6 @@ def generate_results_markdown(
                     f"{stats['win_rate']:.1f}% | {stats['verdict']} |"
                 )
 
-    # -----------------------------------------------------------------------
-    # Ablation Study on Test B
-    # -----------------------------------------------------------------------
     md_lines.append("\n### Per-Stage Classical Pipeline Ablation Study\n")
     md_lines.append("Ablation of individual components on `blur_jpeg_noise` and `haze` degradations (Overall, n=41):\n")
     md_lines.append("| Degradation | Stage Component | Mean ΔPSNR (dB) | 95% CI ΔPSNR | Mean ΔSSIM | 95% CI ΔSSIM | Mean ΔSobel | 95% CI ΔSobel |")
@@ -900,9 +802,6 @@ def generate_results_markdown(
                 f"{stats_e['mean_diff']:+.4f} | [{stats_e['ci_low']:+.4f}, {stats_e['ci_high']:+.4f}] |"
             )
 
-    # -----------------------------------------------------------------------
-    # No-Reference Evaluation on Real Tiles
-    # -----------------------------------------------------------------------
     md_lines.append("\n## 4. No-Reference Evaluation on Real Satellite Tiles\n")
     md_lines.append("Quantification of real image properties without ground truth:\n")
     md_lines.append("- **Laplacian Variance:** Perceived sharpness / edge energy (higher = sharper).")
@@ -967,9 +866,6 @@ def generate_results_markdown(
                 f"{de_str} |"
             )
 
-    # -----------------------------------------------------------------------
-    # Runtime Section
-    # -----------------------------------------------------------------------
     md_lines.append("\n## 5. Runtime and Throughput\n")
     md_lines.append("| Method | Total Time (s) | Avg Seconds / Tile | Single-Core Tiles / Day |")
     md_lines.append("|:---|:---:|:---:|:---:|")
@@ -982,9 +878,6 @@ def generate_results_markdown(
         tiles_per_day = int(86400.0 / avg_t) if avg_t > 0 else 0
         md_lines.append(f"| {meth_name} | {total_t:.2f} s | {avg_t:.4f} s | ~{tiles_per_day:,} |")
 
-    # -----------------------------------------------------------------------
-    # Real-Pair Check Section
-    # -----------------------------------------------------------------------
     md_lines.append("\n## 6. Real-Pair Check (Google Static Maps scale=1 vs scale=2)\n")
     if real_pair is None:
         md_lines.append("Real-pair check: skipped (not configured).\n")
@@ -998,17 +891,14 @@ def generate_results_markdown(
                 f"{rp['ssim_bic']:.4f} | {rp['ssim_sr']:.4f} | {rp['sobel_bic']:.4f} | {rp['sobel_sr']:.4f} |"
             )
 
-    # -----------------------------------------------------------------------
-    # Generated "Answers" Section
-    # -----------------------------------------------------------------------
     md_lines.append("\n## 7. Answers to Core Evaluation Questions\n")
-
-    # Question 1: Does Task 2 (SR) beat Bicubic?
     md_lines.append("### Question 1: Does Learned Super-Resolution (FSRCNN) beat Bicubic Upscaling?\n")
     for var in variants_a:
         md_lines.append(f"#### Variant: `{var}`")
         for src in ["overall", "google", "mapbox"]:
-            stats = test_a_answers[var][src]["diff_psnr"]
+            stats = test_a_answers[var].get(src, {}).get("diff_psnr")
+            if not stats:
+                continue
             mean_d = stats["mean_diff"]
             ci = f"[{stats['ci_low']:+.3f}, {stats['ci_high']:+.3f}]"
             win = stats["win_rate"]
@@ -1022,13 +912,14 @@ def generate_results_markdown(
             md_lines.append(f"- **{src.capitalize()}:** {verdict_str}")
         md_lines.append("")
 
-    # Question 2: Does Task 1 (Classical pipeline) help or hurt?
     md_lines.append("### Question 2: Does the Task 1 Classical Pipeline Help or Hurt?\n")
     for deg in degs_b:
         md_lines.append(f"#### Degradation: `{deg}`")
         for src in ["overall", "google", "mapbox"]:
-            stats_p = test_b_answers[deg][src]["diff_psnr"]
-            stats_s = test_b_answers[deg][src]["diff_ssim"]
+            stats_p = test_b_answers[deg].get(src, {}).get("diff_psnr")
+            stats_s = test_b_answers[deg].get(src, {}).get("diff_ssim")
+            if not stats_p or not stats_s:
+                continue
             ci_p = f"[{stats_p['ci_low']:+.3f}, {stats_p['ci_high']:+.3f}]"
             ci_s = f"[{stats_s['ci_low']:+.4f}, {stats_s['ci_high']:+.4f}]"
 
@@ -1047,7 +938,9 @@ def generate_results_markdown(
     for deg in ["blur_jpeg_noise", "haze"]:
         md_lines.append(f"- **On `{deg}`:**")
         for stg in ["denoise_only", "contrast_only", "sharpen_only", "full_pipeline"]:
-            st_data = ablation_answers[deg][stg]
+            st_data = ablation_answers.get(deg, {}).get(stg)
+            if not st_data:
+                continue
             p_diff = st_data["psnr"]["mean_diff"]
             s_diff = st_data["ssim"]["mean_diff"]
             md_lines.append(
@@ -1055,9 +948,6 @@ def generate_results_markdown(
                 f"ΔSSIM = {s_diff:+.4f} (CI [{st_data['ssim']['ci_low']:+.4f}, {st_data['ssim']['ci_high']:+.4f}])."
             )
 
-    # -----------------------------------------------------------------------
-    # Known Limitations Section
-    # -----------------------------------------------------------------------
     md_lines.append("\n## 8. Known Limitations of this Evaluation\n")
     md_lines.append("1. **Originals are already JPEG-compressed:** The tiles in `data/` were downloaded from mapping APIs and have already undergone lossy compression, quantization, and bilinear resampling. Treating them as pristine ground truth HR means synthetic degradation compounds upon existing artifacts.")
     md_lines.append("2. **Synthetic degradation differs from the real API:** Uniform Gaussian noise, idealized box/Gaussian blur, and Koschmieder optical haze are mathematical approximations. The actual Static Maps API pipeline involves sensor Bayer demosaicing, variable satellite camera PSFs, aerial tiling orthorectification, and non-uniform atmospheric scattering.")
@@ -1065,9 +955,6 @@ def generate_results_markdown(
     md_lines.append("4. **Bicubic downsampling favours SR:** Convolutional super-resolution networks like FSRCNN are trained using bicubic downsampling as the degradation kernel. Evaluating SR on `bicubic_ds` creates an artificial advantage (inverse problem matching the training distribution) compared to realistic anti-aliased area downsampling with noise and compression.")
     md_lines.append("5. **The scale=2 real-pair design is stronger but requires an API key:** Directly acquiring native scale=1 (640x640) and scale=2 (1280x1280) tiles provides true physical sensor ground truth, eliminating synthetic degradation entirely. However, doing so requires active Google Maps Platform API credentials and incurs usage quotas.")
 
-    # -----------------------------------------------------------------------
-    # Per-Image Table
-    # -----------------------------------------------------------------------
     md_lines.append("\n## 9. Per-Image Results Table (Sample / Selected Tiles)\n")
     md_lines.append("| Tile | Source | Variant | SR PSNR | Bicubic PSNR | ΔPSNR | SR SSIM | Bicubic SSIM | ΔSSIM |")
     md_lines.append("|:---|:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|")
@@ -1085,14 +972,9 @@ def generate_results_markdown(
             ds = r["diff_ssim"]
             md_lines.append(f"| {stem} | {src} | {var} | {p_sr:.2f} | {p_bic:.2f} | {dp:+.2f} | {s_sr:.4f} | {s_bic:.4f} | {ds:+.4f} |")
 
-    # Write report
     with open(out_path, mode="w", encoding="utf-8") as f:
         f.write("\n".join(md_lines) + "\n")
 
-
-# ---------------------------------------------------------------------------
-# CLI Entrypoint
-# ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""

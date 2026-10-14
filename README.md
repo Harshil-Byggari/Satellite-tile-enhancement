@@ -72,16 +72,6 @@ python evaluate.py --input data/ --report results.md
 ```
 Generates both `results.md` and `results.csv`.
 
-### D. Comprehensive Evaluation Suite
-Evaluates Test A (SR vs Bicubic), Test B (Classical vs degraded baselines and stage ablations), and no-reference metrics on real tiles with 95% bootstrap confidence intervals (2,000 resamples).
-```bash
-# Fast verification (first 5 tiles):
-python evaluate.py --input data/ --report results.md --limit 5
-
-# Full evaluation across all tiles:
-python evaluate.py --input data/ --report results.md
-```
-Generates both `results.md` and `results.csv`.
 
 ### E. Visual Inspection Grid
 A composite before/after inspection grid is provided at `grid.png` in the repository root, presenting a direct side-by-side comparison across tiles:
