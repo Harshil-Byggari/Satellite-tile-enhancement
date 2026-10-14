@@ -43,11 +43,11 @@ SR_MODEL_URLS = {
     "edsr": "https://github.com/Saafke/EDSR_Tensorflow/raw/master/models/EDSR_x2.pb",
 }
 
-BASE_DIR = Path(__file__).resolve().parent
+MODELS_DIR = Path(__file__).resolve().parent / "models"
 
 SR_MODEL_FILES = {
-    "fsrcnn": BASE_DIR / "models" / "FSRCNN_x2.pb",
-    "edsr": BASE_DIR / "models" / "EDSR_x2.pb",
+    "fsrcnn": MODELS_DIR / "FSRCNN_x2.pb",
+    "edsr": MODELS_DIR / "EDSR_x2.pb",
 }
 
 _SR_CACHE: dict[str, cv2.dnn_superres.DnnSuperResImpl] = {}

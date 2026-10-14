@@ -6,7 +6,7 @@ An end-to-end computer vision and super-resolution pipeline for satellite imager
 
 ## 1. Installation
 
-Create a clean virtual environment and install pinned dependencies:
+Create a clean virtual environment and install version-constrained dependencies:
 
 ```bash
 # Create virtual environment
@@ -36,7 +36,7 @@ All required deliverables are committed in the repository:
 * `evaluate.py`: Quantitative evaluation suite with bootstrap statistics.
 * `WRITEUP.md`: Concise one-page technical report covering all core questions.
 * `README.md`: Setup, execution commands, and dataset notes.
-* `requirements.txt`: Minimal pinned dependencies.
+* `requirements.txt`: Minimal version-constrained dependencies.
 * `grid.png`: 4-panel visual comparison inspection grid in root.
 * `results.md` & `results.csv`: Complete empirical evaluation outputs.
 * `failures/`: Side-by-side comparison crops for empirical failure modes.
@@ -62,14 +62,20 @@ Upscales 2x using bicubic interpolation (`cv2.INTER_CUBIC`).
 python enhance.py --input data/ --output out/bicubic --method bicubic
 ```
 
-### C. Learned Super-Resolution 2x
-Upscales 2x using the pretrained FSRCNN model (cached in memory once per run).
+### C. Learned Super-Resolution 2x (Default: FSRCNN)
+Upscales 2x using the fast pretrained FSRCNN model (~39 KB, cached in memory once per run):
 ```bash
 python enhance.py --input data/ --output out/sr --method sr
 ```
-*(Optional: `--sr-model edsr` to run EDSR instead of FSRCNN).*
 
-### D. Comprehensive Evaluation Suite
+### D. Optional Heavy Super-Resolution 2x (EDSR)
+You can also use the deeper EDSR (Enhanced Deep Residual Networks) model by specifying `--sr-model edsr`:
+```bash
+python enhance.py --input data/ --output out/edsr --method sr --sr-model edsr
+```
+*(EDSR weights `models/EDSR_x2.pb` will auto-download via urllib on first run if not present).*
+
+### E. Comprehensive Evaluation Suite
 Evaluates Test A (SR vs Bicubic), Test B (Classical vs degraded baselines and stage ablations), and no-reference metrics on real tiles with 95% bootstrap confidence intervals (2,000 resamples).
 ```bash
 # Fast verification (first 5 tiles):
@@ -80,7 +86,7 @@ python evaluate.py --input data/ --report results.md
 ```
 Generates both `results.md` and `results.csv`.
 
-### E. Visual Inspection Grid
+### F. Visual Inspection Grid
 A composite before/after inspection grid is provided at `grid.png` in the repository root, presenting a direct side-by-side comparison across tiles:
 1. **Original** (native input resolution)
 2. **Classical Enhancement** (1x, denoised, tone-stretched, CLAHE, and sharpened)
